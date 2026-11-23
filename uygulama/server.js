@@ -187,9 +187,9 @@ app.get('/api/ben', oturumKontrol, async (req, res) => {
 
 app.get('/api/meta', oturumKontrol, async (req, res) => {
   try {
-    const [yh] = await okumaSorgusu('SELECT id, ad, konum, kapasite FROM yemekhaneler ORDER BY id');
-    const [og] = await okumaSorgusu('SELECT id, ad, sira, son_saat, servis_baslangic, servis_bitis FROM ogunler ORDER BY sira');
-    const [al] = await okumaSorgusu('SELECT id, ad FROM alerjenler ORDER BY id');
+    const yh = await okumaSorgusu('SELECT id, ad, konum, kapasite FROM yemekhaneler ORDER BY id');
+    const og = await okumaSorgusu('SELECT id, ad, sira, son_saat, servis_baslangic, servis_bitis FROM ogunler ORDER BY sira');
+    const al = await okumaSorgusu('SELECT id, ad FROM alerjenler ORDER BY id');
     res.json({
       yemekhaneler: yh.satirlar,
       ogunler: og.satirlar,
@@ -529,4 +529,5 @@ const PORT = Number(process.env.PORT || 8000);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Yemekhane uygulama servisi ${PORT} portunda çalışıyor.`);
 });
+
 
