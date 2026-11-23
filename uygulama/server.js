@@ -50,14 +50,21 @@ const redis = createClient({
 redis.on('error', (err) => console.error('Redis hatası:', err.message));
 redis.connect().catch(console.error);
 
-const OTURUM_SURESI = 60 * 60 * 8;
-const MENU_CACHE_TTL = 120;
+const OTURUM_SURESI = 60 * 30; // 30 dakika (her istekte yenilenir)
 
-async function menuCacheTemizle() {
+function gunSonunaKalanSaniye() {
+  const simdi = new Date();
+  const gunSonu = new Date(simdi.getFullYear(), simdi.getMonth(), simdi.getDate(), 23, 59, 59);
+  const fark = Math.floor((gunSonu.getTime() - simdi.getTime()) / 1000);
+  return fark > 60 ? fark : 3600;
+}
+
+async function menuCacheTemizle(filtre = 'menu:*') {
   try {
-    const anahtarlar = await redis.keys('menuler:*');
+    const anahtarlar = await redis.keys(filtre);
     if (anahtarlar.length > 0) {
       await redis.del(anahtarlar);
+      console.log(`[REDIS INVALIDATE] Silinen anahtarlar: ${anahtarlar.join(', ')}`);
     }
   } catch (e) {
     console.warn('Cache temizleme uyarısı:', e.message);
@@ -80,10 +87,18 @@ async function oturumKontrol(req, res, next) {
     return res.status(401).json({ hata: 'Oturum açmanız gerekiyor.' });
   }
   try {
-    const veri = await redis.get(`oturum:${token}`);
+    const anahtar = `oturum:${token}`;
+    const veri = await redis.get(anahtar);
     if (!veri) {
       return res.status(401).json({ hata: 'Oturum süreniz dolmuş, lütfen tekrar giriş yapın.' });
     }
+    await redis.expire(anahtar, OTURUM_SURESI);
+    res.cookie('oturum_token', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: OTURUM_SURESI * 1000,
+      path: '/'
+    });
     req.kullanici = JSON.parse(veri);
     req.oturumToken = token;
     next();
@@ -141,6 +156,7 @@ app.post('/api/giris', async (req, res) => {
     };
 
     await redis.setEx(`oturum:${token}`, OTURUM_SURESI, JSON.stringify(oturumVerisi));
+    console.log(`[OTURUM OLUSTURULDU] oturum:${token} (TTL: ${OTURUM_SURESI}sn)`);
 
     res.cookie('oturum_token', token, {
       httpOnly: true,
@@ -162,6 +178,7 @@ app.post('/api/cikis', async (req, res) => {
   const token = req.cookies?.oturum_token;
   if (token) {
     await redis.del(`oturum:${token}`).catch(() => {});
+    console.log(`[OTURUM SILINDI] oturum:${token}`);
   }
   res.clearCookie('oturum_token', { path: '/' });
   res.json({ mesaj: 'Çıkış yapıldı.' });
@@ -203,15 +220,32 @@ app.get('/api/meta', oturumKontrol, async (req, res) => {
 app.get('/api/menuler', oturumKontrol, async (req, res) => {
   const tarih = req.query.tarih || new Date().toISOString().slice(0, 10);
   const yemekhaneId = req.query.yemekhane_id || 'hepsi';
-  const cacheAnahtari = `menuler:${tarih}:${yemekhaneId}`;
 
   try {
-    let menuler = null;
+    const yhListesi = yemekhaneId === 'hepsi' ? [1, 2] : [Number(yemekhaneId)];
+    const ogunListesi = [1, 2, 3];
+    const cacheMenuler = [];
+    let eksikVar = false;
+
+    for (const yhId of yhListesi) {
+      for (const ogId of ogunListesi) {
+        const key = `menu:${yhId}:${tarih}:${ogId}`;
+        const kayit = await redis.get(key).catch(() => null);
+        if (kayit) {
+          const parsed = JSON.parse(kayit);
+          if (parsed) cacheMenuler.push(parsed);
+        } else {
+          eksikVar = true;
+        }
+      }
+    }
+
+    let menuler = [];
     let kaynak = 'redis-cache';
 
-    const onbellek = await redis.get(cacheAnahtari).catch(() => null);
-    if (onbellek) {
-      menuler = JSON.parse(onbellek);
+    if (!eksikVar) {
+      menuler = cacheMenuler;
+      console.log(`[MENU CACHE HIT] Redis'ten okundu -> tarih=${tarih}, yemekhane=${yemekhaneId}`);
     } else {
       let sql = 'SELECT * FROM v_menu_detay WHERE tarih = ?';
       const params = [tarih];
@@ -223,6 +257,7 @@ app.get('/api/menuler', oturumKontrol, async (req, res) => {
 
       const sonuc = await okumaSorgusu(sql, params);
       kaynak = sonuc.kaynak;
+      console.log(`[MENU DB MISS] Veritabanindan (${kaynak}) okundu -> tarih=${tarih}, yemekhane=${yemekhaneId}`);
 
       const dolulukSonuc = await okumaSorgusu('SELECT * FROM v_menu_doluluk WHERE tarih = ?', [tarih]);
       const puanSonuc = await okumaSorgusu('SELECT * FROM v_menu_puan');
@@ -270,7 +305,14 @@ app.get('/api/menuler', oturumKontrol, async (req, res) => {
       }
 
       menuler = Array.from(menuMap.values());
-      await redis.setEx(cacheAnahtari, MENU_CACHE_TTL, JSON.stringify(menuler)).catch(() => {});
+      const ttl = gunSonunaKalanSaniye();
+      for (const yhId of yhListesi) {
+        for (const ogId of ogunListesi) {
+          const eslesen = menuler.find((x) => x.yemekhane_id === yhId && x.ogun_id === ogId) || null;
+          const key = `menu:${yhId}:${tarih}:${ogId}`;
+          await redis.setEx(key, ttl, JSON.stringify(eslesen)).catch(() => {});
+        }
+      }
     }
 
     const [rezler] = await yazmaHavuzu.execute(
@@ -504,7 +546,7 @@ app.post('/api/yonetim/menuler', oturumKontrol, yoneticiKontrol, async (req, res
     }
 
     await conn.commit();
-    await menuCacheTemizle();
+    await menuCacheTemizle(`menu:${Number(yemekhane_id)}:${tarih}:${Number(ogun_id)}`);
     res.status(201).json({ mesaj: 'Menü kaydedildi ve önbellek güncellendi.', menu_id: menuId });
   } catch (err) {
     await conn.rollback();
@@ -529,5 +571,3 @@ const PORT = Number(process.env.PORT || 8000);
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Yemekhane uygulama servisi ${PORT} portunda çalışıyor.`);
 });
-
-
