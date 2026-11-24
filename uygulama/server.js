@@ -194,11 +194,55 @@ app.get('/api/ben', oturumKontrol, async (req, res) => {
       return res.status(404).json({ hata: 'Kullanıcı bulunamadı.' });
     }
     const k = satirlar[0];
+    const [alerjenler] = await yazmaHavuzu.execute(
+      'SELECT alerjen_id FROM kullanici_alerjenleri WHERE kullanici_id = ? ORDER BY alerjen_id',
+      [req.kullanici.id]
+    );
     res.json({
-      kullanici: { ...k, bakiye: Number(k.bakiye) }
+      kullanici: {
+        ...k,
+        bakiye: Number(k.bakiye),
+        alerjen_idler: alerjenler.map((a) => Number(a.alerjen_id))
+      }
     });
   } catch (err) {
     res.status(500).json({ hata: hataMesaji(err) });
+  }
+});
+
+app.get('/api/profil/alerjenler', oturumKontrol, async (req, res) => {
+  try {
+    const [satirlar] = await yazmaHavuzu.execute(
+      'SELECT alerjen_id FROM kullanici_alerjenleri WHERE kullanici_id = ? ORDER BY alerjen_id',
+      [req.kullanici.id]
+    );
+    res.json({ alerjen_idler: satirlar.map((s) => Number(s.alerjen_id)) });
+  } catch (err) {
+    res.status(500).json({ hata: hataMesaji(err) });
+  }
+});
+
+app.put('/api/profil/alerjenler', oturumKontrol, async (req, res) => {
+  const liste = Array.isArray(req.body?.alerjen_idler) ? req.body.alerjen_idler.map(Number) : [];
+  const conn = await yazmaHavuzu.getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.execute('DELETE FROM kullanici_alerjenleri WHERE kullanici_id = ?', [req.kullanici.id]);
+    for (const alId of liste) {
+      if (Number.isInteger(alId) && alId > 0) {
+        await conn.execute(
+          'INSERT INTO kullanici_alerjenleri (kullanici_id, alerjen_id) VALUES (?, ?)',
+          [req.kullanici.id, alId]
+        );
+      }
+    }
+    await conn.commit();
+    res.json({ mesaj: 'Alerjen tercihleriniz güncellendi.', alerjen_idler: liste });
+  } catch (err) {
+    await conn.rollback();
+    res.status(400).json({ hata: hataMesaji(err) });
+  } finally {
+    conn.release();
   }
 });
 
@@ -281,6 +325,7 @@ app.get('/api/menuler', oturumKontrol, async (req, res) => {
             rezervasyon_son: s.rezervasyon_son,
             ogrenci_fiyati: Number(s.ogrenci_fiyati),
             personel_fiyati: Number(s.personel_fiyati),
+            yarim_porsiyon_uygun: Number(s.ogun_id) !== 1,
             kapasite: dol.kapasite ?? 0,
             rezerve: dol.rezerve ?? 0,
             bos_yer: dol.bos_yer ?? 0,
@@ -316,13 +361,14 @@ app.get('/api/menuler', oturumKontrol, async (req, res) => {
     }
 
     const [rezler] = await yazmaHavuzu.execute(
-      'SELECT id, menu_id, durum FROM rezervasyonlar WHERE kullanici_id = ?',
+      'SELECT id, menu_id, durum, porsiyon FROM rezervasyonlar WHERE kullanici_id = ?',
       [req.kullanici.id]
     );
     const rezMap = new Map(rezler.map((r) => [r.menu_id, r]));
 
     const zenginMenuler = menuler.map((m) => ({
       ...m,
+      yarim_porsiyon_uygun: Number(m.ogun_id) !== 1,
       kullanici_rezervasyon: rezMap.get(m.menu_id) || null
     }));
 
@@ -336,7 +382,7 @@ app.get('/api/menuler', oturumKontrol, async (req, res) => {
 app.get('/api/rezervasyonlar', oturumKontrol, async (req, res) => {
   try {
     const [satirlar] = await yazmaHavuzu.execute(
-      `SELECT r.id, r.menu_id, r.durum, r.ucret, r.olusturma, r.kullanma_zamani, r.iptal_zamani,
+      `SELECT r.id, r.menu_id, r.durum, r.porsiyon, r.ucret, r.olusturma, r.kullanma_zamani, r.iptal_zamani,
               m.tarih, yh.ad AS yemekhane, o.ad AS ogun, o.son_saat,
               TIMESTAMP(m.tarih, o.son_saat) AS rezervasyon_son,
               d.id AS degerlendirme_id, d.puan AS kullanici_puan, d.yorum AS kullanici_yorum
@@ -356,20 +402,23 @@ app.get('/api/rezervasyonlar', oturumKontrol, async (req, res) => {
 });
 
 app.post('/api/rezervasyonlar', oturumKontrol, async (req, res) => {
-  const { menu_id } = req.body || {};
+  const { menu_id, porsiyon } = req.body || {};
   if (!menu_id) {
     return res.status(400).json({ hata: 'Menü seçilmedi.' });
   }
+  const secilenPorsiyon = porsiyon === 'yarim' ? 'yarim' : 'tam';
   try {
-    const [sonuc] = await yazmaHavuzu.execute('CALL sp_rezervasyon_yap(?, ?)', [
+    const [sonuc] = await yazmaHavuzu.execute('CALL sp_rezervasyon_yap(?, ?, ?)', [
       req.kullanici.id,
-      Number(menu_id)
+      Number(menu_id),
+      secilenPorsiyon
     ]);
     await menuCacheTemizle();
     const satir = sonuc[0][0];
     res.status(201).json({
-      mesaj: 'Rezervasyon başarıyla oluşturuldu.',
+      mesaj: `Rezervasyon (${satir.porsiyon === 'yarim' ? 'Yarım Porsiyon' : 'Tam Porsiyon'}) başarıyla oluşturuldu.`,
       rezervasyon_id: satir.rezervasyon_id,
+      porsiyon: satir.porsiyon,
       ucret: Number(satir.ucret),
       bakiye: Number(satir.bakiye)
     });

@@ -58,6 +58,7 @@
         <button type="button" class="sekme-btn aktif" data-sekme="menuler">Günlük Menü</button>
         <button type="button" class="sekme-btn" data-sekme="rezervasyonlar">Rezervasyonlarım</button>
         <button type="button" class="sekme-btn" data-sekme="bakiye">Bakiye &amp; Hareketler</button>
+        <button type="button" class="sekme-btn" data-sekme="profil">Profil &amp; Alerjenler</button>
         <button type="button" class="sekme-btn" data-sekme="turnike">Turnike Geçişi</button>
         <button type="button" id="yonetim-sekme-btn" class="sekme-btn gizli" data-sekme="yonetim">Yönetim Paneli</button>
       </nav>
@@ -104,6 +105,7 @@
                 <tr>
                   <th>Tarih / Öğün</th>
                   <th>Yemekhane</th>
+                  <th>Porsiyon</th>
                   <th>Ücret</th>
                   <th>Durum</th>
                   <th>İşlem / Değerlendirme</th>
@@ -170,6 +172,20 @@
               <tbody id="hareket-tablo"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <div id="sekme-profil" class="sekme-icerik gizli">
+        <div class="kart" style="max-width: 640px;">
+          <h2>Profil &amp; Alerjen Tercihlerim</h2>
+          <p id="profil-ozet" style="font-size: var(--boyut-kucuk); color: var(--metin-soluk); margin-bottom: 1rem;"></p>
+          <p style="font-size: var(--boyut-kucuk); margin-bottom: 0.75rem;">
+            Hassasiyetiniz olan alerjenleri işaretleyin. Menü ekranında bu alerjenleri içeren yemekler özel uyarı ile vurgulanacaktır.
+          </p>
+          <form id="profil-alerjen-form">
+            <div id="profil-alerjen-listesi" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;"></div>
+            <button type="submit" class="dugme">Alerjen Tercihlerini Kaydet</button>
+          </form>
         </div>
       </div>
 
